@@ -152,7 +152,7 @@ const LIGA = [
   { name: 'Señala al más probable', emoji: '👉', type: 'likely', bg: 'linear-gradient(160deg,#3db8ff,#7a1fd1)' },
   { name: 'Exposed', emoji: '📸', type: 'write', perPlayer: 2, bg: 'linear-gradient(160deg,#ff3d7f,#ff9f1c)',
     placeholder: n => `Pregunta ${n} (ej: "Luis, ¿con quién de aquí te liarías?")`,
-    rules: 'Escribe <b>2 preguntas</b>. Cada pregunta tiene que ir <b>dirigida a una persona concreta</b> (pon su nombre). Son anónimas: cuando todos las hayáis enviado, Teo las irá leyendo una a una.' },
+    rules: 'Escribe <b>2 preguntas</b>. Cada pregunta tiene que ir <b>dirigida a una persona concreta</b> (pon su nombre). Cuando todos las hayáis enviado, Teo las irá leyendo una a una (y puede revelar quién la escribió 👀).' },
   { name: 'Confesión', emoji: '🤫', type: 'write', perPlayer: 1, guess: true, bg: 'linear-gradient(160deg,#2ee59d,#1765c4)',
     placeholder: () => 'Tu confesión…',
     rules: 'Escribe <b>una confesión tuya</b>. Cuando todos la hayáis enviado, Teo las irá leyendo una a una y el resto votará en su móvil <b>de quién creen que es</b>.' },
@@ -496,6 +496,8 @@ function readView() {
           `<button class="${myGuess === p.id ? 'chosen' : ''}" data-act="guess" data-sub="${it.id}" data-id="${p.id}">${esc(p.name)}</button>`).join('')}</div>
         <p class="center muted" style="margin:10px 0 0">Han votado ${gs.length}</p></div>`;
     }
+  } else if (g.reveal) {
+    html += `<div class="card center"><p style="font-size:20px;margin:0">La escribió <b class="me">${esc(playerName(it.player_id))}</b> 😳</p></div>`;
   }
 
   if (isAdmin()) {
@@ -507,6 +509,9 @@ function readView() {
         const awarded = (g.awarded || []).includes(it.id);
         html += `<button class="green" data-act="award" data-sub="${it.id}" ${awarded || !nRight ? 'disabled' : ''}>${awarded ? '✅ Puntos dados' : `+1 a los que acertaron (${nRight})`}</button>`;
       }
+    } else {
+      html += g.reveal ? `<button class="ghost" data-act="hide">🙈 Ocultar quién la escribió</button>`
+        : `<button class="pink" data-act="reveal">👀 Revelar quién la escribió</button>`;
     }
     html += `<div class="navrow">
       <button class="ghost" data-act="step" data-d="-1" ${step === 0 ? 'disabled' : ''}>← Anterior</button>
@@ -709,6 +714,7 @@ document.addEventListener('click', async e => {
       case 'backToWrite': await setGame({ stage: 'write', reveal: false }); break;
       case 'guess': await guess(b.dataset.sub, id); break;
       case 'reveal': await setGame({ reveal: true }); break;
+      case 'hide': await setGame({ reveal: false }); break;
       case 'award': await awardCorrect(b.dataset.sub); break;
       case 'startDraft':
         if (state.game.phase !== 'liga_done' && !confirm('¿Repetir la elección desde cero?')) break;
