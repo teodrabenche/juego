@@ -155,7 +155,7 @@ const LIGA = [
     rules: 'Escribe <b>2 preguntas</b>. Cada pregunta tiene que ir <b>dirigida a una persona concreta</b> (pon su nombre). Cuando todos las hayáis enviado, Teo las irá leyendo una a una (y puede revelar quién la escribió 👀).' },
   { name: 'Confesión', emoji: '🤫', type: 'write', perPlayer: 1, guess: true, bg: 'linear-gradient(160deg,#2ee59d,#1765c4)',
     placeholder: () => 'Tu confesión…',
-    rules: 'Escribe <b>una confesión tuya</b>. Cuando todos la hayáis enviado, Teo las irá leyendo una a una y el resto votará en su móvil <b>de quién creen que es</b>.' },
+    rules: 'Escribe <b>una confesión tuya</b>. Cuando todos la hayáis enviado, Teo las irá leyendo una a una y el resto votará en su móvil <b>de quién creen que es</b>. Si la mayoría acierta, se descubre; si no, se queda en secreto 🤐' },
   { name: 'Piedra, papel o tijera', emoji: '✊', type: 'title', bg: 'linear-gradient(160deg,#ffcc00,#ff5a5a)' },
   { name: 'Canción', emoji: '🎤', type: 'title', bg: 'linear-gradient(160deg,#9b2cff,#ff3d7f)' },
 ];
@@ -244,6 +244,14 @@ function roundPoints(round) {
   const r = {};
   state.scores.filter(s => s.round === round).forEach(s => r[s.player_id] = s.points);
   return r;
+}
+// most-voted player for a confession; correct only if the author has strictly the most votes
+function voteResult(sub) {
+  const count = {};
+  state.guesses.filter(x => x.submission_id === sub.id).forEach(x => count[x.guess] = (count[x.guess] || 0) + 1);
+  const ranking = Object.entries(count).sort((a, b) => b[1] - a[1]);
+  const correct = ranking.length > 0 && ranking[0][0] === sub.player_id && (ranking.length === 1 || ranking[1][1] < ranking[0][1]);
+  return { ranking, correct };
 }
 const roundSubs = () => state.submissions.filter(s => s.round === state.game.round).sort((a, b) => a.sort_key - b.sort_key);
 function teamScores() {
@@ -484,9 +492,14 @@ function readView() {
     const gs = state.guesses.filter(x => x.submission_id === it.id);
     const myGuess = gs.find(x => x.player_id === myId)?.guess;
     if (g.reveal) {
-      const right = gs.filter(x => x.guess === it.player_id).map(x => playerName(x.player_id));
-      html += `<div class="card center"><p style="font-size:20px;margin:0 0 6px">Era de <b class="me">${esc(playerName(it.player_id))}</b> 😳</p>
-        <p class="muted" style="margin:0">${right.length ? 'Acertaron: ' + right.map(esc).join(', ') : 'Nadie acertó'}</p></div>`;
+      const v = voteResult(it);
+      const tally = v.ranking.map(([id, n]) => `${esc(playerName(id))} ${n}`).join(' · ');
+      html += v.correct
+        ? `<div class="card center" style="border:2px solid var(--green)"><p style="font-size:22px;margin:0 0 6px">✅ ¡Habéis acertado!</p>
+            <p style="font-size:20px;margin:0 0 6px">Era de <b class="me">${esc(playerName(it.player_id))}</b> 😳</p>
+            <p class="muted" style="margin:0">Votos: ${tally}</p></div>`
+        : `<div class="card center" style="border:2px solid var(--red)"><p style="font-size:22px;margin:0 0 6px">❌ No habéis acertado</p>
+            <p class="muted" style="margin:0">${tally ? 'Votos: ' + tally : 'Nadie ha votado'}</p></div>`;
     } else if (it.player_id === myId) {
       html += `<div class="card center"><p style="font-size:18px;margin:0">🤫 Es la tuya. Disimula…</p>
         <p class="muted" style="margin:6px 0 0">Han votado ${gs.length}</p></div>`;
@@ -503,9 +516,10 @@ function readView() {
   if (isAdmin()) {
     html += `<div class="card admin-box"><h2>👑 Control</h2>`;
     if (lg.guess) {
-      if (!g.reveal) html += `<button class="pink" data-act="reveal">👀 Revelar de quién es</button>`;
+      if (!g.reveal) html += `<button class="pink" data-act="reveal">✅ Confirmar votos</button>`;
       else {
         const nRight = state.guesses.filter(x => x.submission_id === it.id && x.guess === it.player_id).length;
+        if (!voteResult(it).correct) html += `<p class="muted" style="margin:0">Solo tú ves esto: era de <b>${esc(playerName(it.player_id))}</b></p>`;
         const awarded = (g.awarded || []).includes(it.id);
         html += `<button class="green" data-act="award" data-sub="${it.id}" ${awarded || !nRight ? 'disabled' : ''}>${awarded ? '✅ Puntos dados' : `+1 a los que acertaron (${nRight})`}</button>`;
       }
