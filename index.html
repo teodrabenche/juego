@@ -99,6 +99,25 @@
   .big { font-size: 64px; text-align: center; margin: 10px 0; }
   .conn { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--green); margin-right: 6px; }
   .conn.off { background: var(--red); }
+  textarea {
+    width: 100%; min-height: 84px; padding: 12px; border-radius: 12px; border: 2px solid #4a2a78; background: #1a0b2c; color: var(--text);
+    font-size: 17px; font-family: inherit; outline: none; resize: vertical; margin-top: 8px;
+  }
+  textarea:focus { border-color: var(--accent); }
+  .rules { background: #ffffff10; border-radius: 12px; padding: 10px 12px; font-size: 15px; margin: 0 0 10px; }
+  .q-card { text-align: center; padding: 26px 16px; }
+  .q-card .lead { color: var(--muted); font-size: 15px; margin-bottom: 8px; }
+  .q-card .q { font-size: 26px; font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+  .q-card .count { color: var(--muted); font-size: 14px; margin-top: 12px; }
+  .score-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #ffffff10; }
+  .score-row:last-child { border-bottom: 0; }
+  .score-row .name { font-size: 16px; }
+  .score-row .rp { font-family: Bungee, sans-serif; font-size: 20px; width: 40px; text-align: center; }
+  .score-row .tot { color: var(--muted); font-size: 13px; width: 44px; text-align: right; }
+  .score-row button { width: 46px; height: 46px; padding: 0; margin: 0; font-size: 24px; border-radius: 12px; }
+  .grid-pick button.chosen { background: var(--pink); color: #fff; }
+  .navrow { display: flex; gap: 10px; }
+  .navrow button { flex: 1; }
 </style>
 </head>
 <body>
@@ -109,7 +128,39 @@
 const SUPABASE_URL = 'https://zcpjjwrbowxsgfefgovf.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_I6R-od7RfmThBbCJGXGoig_Dpax8dhR';
 const ADMIN_NAME = 'teo';
-const LIGA_ROUNDS = 5;
+
+const LIKELY = [
+  'acabe de fiesta con un profesor de la uni',
+  'aparezca borracho en casa de un guiri',
+  'mande un audio de 5 minutos a su ex a las 4 de la mañana',
+  'le echen de una discoteca',
+  'se líe con alguien de este grupo',
+  'acabe durmiendo en un portal',
+  'pierda el móvil esta noche',
+  'termine en un after con gente que no conoce de nada',
+  'vaya a clase sin dormir y con la ropa de ayer',
+  'llame a su madre llorando borracho',
+  'se case con alguien que conoció de Erasmus',
+  'se haga viral por hacer el ridículo',
+  'suspenda una asignatura por ir de resaca al examen',
+  'acabe en urgencias por una tontería de fiesta',
+  'tenga un hijo antes de los 25',
+];
+
+const LIGA = [
+  { name: 'Bebé', emoji: '🍼', type: 'title', bg: 'linear-gradient(160deg,#ff8fb1,#9b2cff)' },
+  { name: 'Señala al más probable', emoji: '👉', type: 'likely', bg: 'linear-gradient(160deg,#3db8ff,#7a1fd1)' },
+  { name: 'Exposed', emoji: '📸', type: 'write', perPlayer: 2, bg: 'linear-gradient(160deg,#ff3d7f,#ff9f1c)',
+    placeholder: n => `Pregunta ${n} (ej: "Luis, ¿con quién de aquí te liarías?")`,
+    rules: 'Escribe <b>2 preguntas</b>. Cada pregunta tiene que ir <b>dirigida a una persona concreta</b> (pon su nombre). Son anónimas: cuando todos las hayáis enviado, Teo las irá leyendo una a una.' },
+  { name: 'Confesión', emoji: '🤫', type: 'write', perPlayer: 1, guess: true, bg: 'linear-gradient(160deg,#2ee59d,#1765c4)',
+    placeholder: () => 'Tu confesión…',
+    rules: 'Escribe <b>una confesión tuya</b>. Cuando todos la hayáis enviado, Teo las irá leyendo una a una y el resto votará en su móvil <b>de quién creen que es</b>.' },
+  { name: 'Piedra, papel o tijera', emoji: '✊', type: 'title', bg: 'linear-gradient(160deg,#ffcc00,#ff5a5a)' },
+  { name: 'Canción', emoji: '🎤', type: 'title', bg: 'linear-gradient(160deg,#9b2cff,#ff3d7f)' },
+];
+const LIGA_ROUNDS = LIGA.length;
+
 const TEAM_GAMES = [
   { name: 'Dardos', emoji: '🎯', bg: 'linear-gradient(160deg,#ff3d7f,#7a1fd1)', sub: 'Puntería y pulso firme' },
   { name: 'Bolas', emoji: '🎳', bg: 'linear-gradient(160deg,#2ee59d,#1765c4)', sub: 'Que ruede la suerte' },
@@ -123,10 +174,11 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch {} },
 };
 
-let state = { game: null, players: [], scores: [], loaded: false };
+let state = { game: null, players: [], scores: [], submissions: [], guesses: [], loaded: false };
 let myId = store.get('juego_player_id');
 let online = true;
-let draft = {}; // admin score inputs kept across re-renders
+let editing = false; // re-editing my submission
+let pendingRender = false;
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -146,15 +198,19 @@ async function run(promise) {
 
 // ---------- data ----------
 async function load() {
-  const [g, p, s] = await Promise.all([
+  const [g, p, s, sub, gu] = await Promise.all([
     sb.from('game').select('*').eq('id', 1).single(),
     sb.from('players').select('*').order('created_at'),
     sb.from('scores').select('*'),
+    sb.from('submissions').select('*'),
+    sb.from('guesses').select('*'),
   ]);
-  if (g.error || p.error || s.error) { online = false; render(); return; }
+  if ([g, p, s, sub, gu].some(r => r.error)) { online = false; render(); return; }
   online = true;
-  const phaseChanged = !state.game || g.data.phase !== state.game.phase || g.data.round !== state.game.round;
-  state = { game: g.data, players: p.data, scores: s.data, loaded: true };
+  const prev = state.game;
+  const phaseChanged = !prev || ['phase', 'round', 'stage', 'step', 'reveal', 'team_game'].some(k => g.data[k] !== prev[k]);
+  if (prev && (g.data.round !== prev.round || g.data.stage !== prev.stage)) editing = false;
+  state = { game: g.data, players: p.data, scores: s.data, submissions: sub.data, guesses: gu.data, loaded: true };
   if (myId && !state.players.find(x => x.id === myId)) { myId = null; store.del('juego_player_id'); }
   if (typing() && !phaseChanged) { pendingRender = true; return; }
   render();
@@ -163,19 +219,19 @@ async function load() {
 let loadTimer = null;
 function scheduleLoad() { clearTimeout(loadTimer); loadTimer = setTimeout(load, 120); }
 
-sb.channel('juego')
-  .on('postgres_changes', { event: '*', schema: 'public', table: 'game' }, scheduleLoad)
-  .on('postgres_changes', { event: '*', schema: 'public', table: 'players' }, scheduleLoad)
-  .on('postgres_changes', { event: '*', schema: 'public', table: 'scores' }, scheduleLoad)
-  .subscribe();
+const channel = sb.channel('juego');
+['game', 'players', 'scores', 'submissions', 'guesses'].forEach(table =>
+  channel.on('postgres_changes', { event: '*', schema: 'public', table }, scheduleLoad));
+channel.subscribe();
 setInterval(() => load(), 6000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
 
 // ---------- helpers ----------
-const typing = () => { const a = document.activeElement; return !!a && a.tagName === 'INPUT'; };
+const typing = () => { const a = document.activeElement; return !!a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'); };
 const me = () => state.players.find(p => p.id === myId);
 const isAdmin = () => me() && me().name.trim().toLowerCase() === ADMIN_NAME;
 const playerName = id => state.players.find(p => p.id === id)?.name ?? '¿?';
+const ligaGame = () => LIGA[state.game.round - 1];
 function totals() {
   const t = {};
   state.players.forEach(p => t[p.id] = 0);
@@ -189,6 +245,7 @@ function roundPoints(round) {
   state.scores.filter(s => s.round === round).forEach(s => r[s.player_id] = s.points);
   return r;
 }
+const roundSubs = () => state.submissions.filter(s => s.round === state.game.round).sort((a, b) => a.sort_key - b.sort_key);
 function teamScores() {
   const res = state.game.team_results || {};
   const sc = { 1: 0, 2: 0 };
@@ -220,24 +277,50 @@ function leave() {
   myId = null; store.del('juego_player_id'); render();
 }
 
-async function startRound() {
-  const n = state.game.round + 1;
-  const title = (document.getElementById('roundTitle')?.value || '').trim();
-  draft = {};
-  await setGame({ phase: 'round', round: n, round_title: title || null });
+async function startRound(n) {
+  const lg = LIGA[n - 1];
+  await setGame({ phase: 'round', round: n, round_title: lg.name, stage: lg.type === 'write' ? 'write' : 'play', step: 0, reveal: false });
 }
 
-async function endRound() {
-  draft = { ...roundPoints(state.game.round) };
-  await setGame({ phase: 'scoring' });
-}
-
-async function saveScores() {
+async function addPoints(playerId, delta) {
   const round = state.game.round;
-  const rows = state.players.map(p => ({ player_id: p.id, round, points: parseInt(draft[p.id], 10) || 0 }));
-  await run(sb.from('scores').upsert(rows));
-  draft = {};
-  await setGame({ phase: round >= LIGA_ROUNDS ? 'liga_done' : 'between' });
+  // optimistic, then the atomic increment on the server
+  const row = state.scores.find(s => s.player_id === playerId && s.round === round);
+  if (row) row.points += delta; else state.scores.push({ player_id: playerId, round, points: delta });
+  render();
+  await run(sb.rpc('add_points', { p_player: playerId, p_round: round, p_delta: delta }));
+}
+
+async function submitWriting() {
+  const lg = ligaGame();
+  const rows = [];
+  for (let i = 0; i < lg.perPlayer; i++) {
+    const text = (document.getElementById('w' + i)?.value || '').trim();
+    if (!text) return toast(lg.perPlayer > 1 ? 'Rellena las dos' : 'Escribe algo');
+    rows.push({ round: state.game.round, player_id: myId, slot: i, text: text.slice(0, 300) });
+  }
+  await run(sb.from('submissions').upsert(rows, { onConflict: 'round,player_id,slot' }));
+  editing = false;
+  document.activeElement?.blur();
+}
+
+async function setStep(step) {
+  const n = roundSubs().length;
+  if (state.game.stage === 'read') step = Math.max(0, Math.min(step, n - 1));
+  else step = Math.max(0, Math.min(step, LIKELY.length - 1));
+  await setGame({ step, reveal: false });
+}
+
+async function guess(subId, guessId) {
+  await run(sb.from('guesses').upsert({ submission_id: subId, player_id: myId, guess: guessId }, { onConflict: 'submission_id,player_id' }));
+}
+
+async function awardCorrect(subId) {
+  const sub = state.submissions.find(s => s.id === subId);
+  if (!sub || (state.game.awarded || []).includes(subId)) return;
+  const winners = state.guesses.filter(g => g.submission_id === subId && g.guess === sub.player_id).map(g => g.player_id);
+  await setGame({ awarded: [...(state.game.awarded || []), subId] });
+  for (const w of winners) await addPoints(w, 1);
 }
 
 async function startDraft() {
@@ -252,10 +335,7 @@ async function startDraft() {
 
 async function pick(playerId) {
   await run(sb.rpc('pick_player', { p_captain: myId, p_player: playerId }));
-  load();
 }
-
-async function startTeamGames() { await setGame({ phase: 'tgame', team_game: 0 }); }
 
 async function setWinner(team) {
   const res = { ...(state.game.team_results || {}) };
@@ -282,15 +362,13 @@ async function removePlayer(id) {
 }
 
 async function resetGame(keepPlayers) {
-  if (!confirm(keepPlayers ? '¿Reiniciar la partida? Se borran todos los puntos y equipos.' : '¿Borrar TODO, jugadores incluidos?')) return;
+  if (!confirm(keepPlayers ? '¿Reiniciar la partida? Se borran todos los puntos, textos y equipos.' : '¿Borrar TODO, jugadores incluidos?')) return;
+  await run(sb.from('submissions').delete().not('id', 'is', null));
   await run(sb.from('scores').delete().not('player_id', 'is', null));
   if (keepPlayers) await run(sb.from('players').update({ team: null }).not('id', 'is', null));
   else await run(sb.from('players').delete().not('id', 'is', null));
-  draft = {};
-  await setGame({ phase: 'lobby', round: 0, round_title: null, captains: [], pick_turn: 0, team_game: 0, team_results: {} });
+  await setGame({ phase: 'lobby', round: 0, round_title: null, stage: 'play', step: 0, reveal: false, awarded: [], captains: [], pick_turn: 0, team_game: 0, team_results: {} });
 }
-
-async function goBack(phase) { await setGame({ phase }); }
 
 // ---------- views ----------
 function leaderboard(limitHighlight = 0) {
@@ -308,8 +386,8 @@ function roundDots() {
   const g = state.game;
   let html = '<div class="dots">';
   for (let i = 1; i <= LIGA_ROUNDS; i++) {
-    const done = i < g.round || (i === g.round && ['between', 'liga_done'].includes(g.phase)) || ['draft', 'teams', 'tgame', 'final'].includes(g.phase);
-    const now = i === g.round && ['round', 'scoring'].includes(g.phase);
+    const done = i < g.round || (i === g.round && g.phase !== 'round') || !['lobby', 'round', 'between', 'liga_done'].includes(g.phase);
+    const now = i === g.round && g.phase === 'round';
     html += `<span class="dot ${done ? 'done' : ''} ${now ? 'now' : ''}"></span>`;
   }
   return html + '</div>';
@@ -349,33 +427,132 @@ function joinView() {
     ${state.players.length ? `<div class="card"><h2>Ya dentro</h2><p>${state.players.map(p => esc(p.name)).join(' · ')}</p></div>` : ''}`;
 }
 
-function adminPanel() {
+// --- liga round content ---
+function likelyView() {
+  const g = state.game;
+  let html = `<div class="card q-card">
+    <div class="lead">¿Quién es más probable que…</div>
+    <div class="q">${esc(LIKELY[g.step])}?</div>
+    <div class="count">Pregunta ${g.step + 1} de ${LIKELY.length} · a la de tres, ¡señalad! 👉</div>
+  </div>`;
+  if (isAdmin()) html += `<div class="navrow">
+    <button class="ghost" data-act="step" data-d="-1" ${g.step === 0 ? 'disabled' : ''}>← Anterior</button>
+    <button data-act="step" data-d="1" ${g.step >= LIKELY.length - 1 ? 'disabled' : ''}>Siguiente →</button></div>`;
+  return html;
+}
+
+function writeView() {
+  const g = state.game, lg = ligaGame();
+  const subs = state.submissions.filter(s => s.round === g.round);
+  const mine = subs.filter(s => s.player_id === myId).sort((a, b) => a.slot - b.slot);
+  const done = mine.length >= lg.perPlayer;
+  const authors = new Set(subs.map(s => s.player_id));
+  const finished = state.players.filter(p => subs.filter(s => s.player_id === p.id).length >= lg.perPlayer);
+  const missing = state.players.filter(p => !finished.includes(p));
+
+  let html = `<div class="card"><p class="rules">${lg.rules}</p>`;
+  if (!done || editing) {
+    for (let i = 0; i < lg.perPlayer; i++)
+      html += `<textarea id="w${i}" maxlength="300" placeholder="${esc(lg.placeholder(i + 1))}">${esc(mine[i]?.text || '')}</textarea>`;
+    html += `<button class="green" data-act="submitWriting">📨 Enviar</button>`;
+  } else {
+    html += `<p class="center" style="font-size:18px">✅ ¡Enviado!</p>
+      <button class="ghost" data-act="edit">✏️ Cambiar lo que he puesto</button>`;
+  }
+  html += `<p class="center muted" style="margin-bottom:0">Han enviado ${finished.length} de ${state.players.length}</p></div>`;
+
+  if (isAdmin()) {
+    html += `<div class="card admin-box"><h2>👑 Control</h2>
+      ${missing.length ? `<p class="muted">Faltan: ${missing.map(p => esc(p.name)).join(', ')}</p>` : '<p>✅ Ya han enviado todos</p>'}
+      <button class="${missing.length ? 'ghost' : 'green'}" data-act="startReading" ${authors.size ? '' : 'disabled'}>📖 Empezar a leer${missing.length ? ' (aunque falte gente)' : ''}</button></div>`;
+  }
+  return html;
+}
+
+function readView() {
+  const g = state.game, lg = ligaGame();
+  const items = roundSubs();
+  if (!items.length) return '<p class="center muted">No hay nada que leer.</p>';
+  const step = Math.min(g.step, items.length - 1);
+  const it = items[step];
+  let html = `<div class="card q-card">
+    <div class="lead">${lg.guess ? 'Confesión' : 'Pregunta'} ${step + 1} de ${items.length}</div>
+    <div class="q">“${esc(it.text)}”</div>
+  </div>`;
+
+  if (lg.guess) {
+    const gs = state.guesses.filter(x => x.submission_id === it.id);
+    const myGuess = gs.find(x => x.player_id === myId)?.guess;
+    if (g.reveal) {
+      const right = gs.filter(x => x.guess === it.player_id).map(x => playerName(x.player_id));
+      html += `<div class="card center"><p style="font-size:20px;margin:0 0 6px">Era de <b class="me">${esc(playerName(it.player_id))}</b> 😳</p>
+        <p class="muted" style="margin:0">${right.length ? 'Acertaron: ' + right.map(esc).join(', ') : 'Nadie acertó'}</p></div>`;
+    } else if (it.player_id === myId) {
+      html += `<div class="card center"><p style="font-size:18px;margin:0">🤫 Es la tuya. Disimula…</p>
+        <p class="muted" style="margin:6px 0 0">Han votado ${gs.length}</p></div>`;
+    } else {
+      html += `<div class="card"><h2>¿De quién es?</h2>
+        <div class="grid-pick">${state.players.filter(p => p.id !== myId).map(p =>
+          `<button class="${myGuess === p.id ? 'chosen' : ''}" data-act="guess" data-sub="${it.id}" data-id="${p.id}">${esc(p.name)}</button>`).join('')}</div>
+        <p class="center muted" style="margin:10px 0 0">Han votado ${gs.length}</p></div>`;
+    }
+  }
+
+  if (isAdmin()) {
+    html += `<div class="card admin-box"><h2>👑 Control</h2>`;
+    if (lg.guess) {
+      if (!g.reveal) html += `<button class="pink" data-act="reveal">👀 Revelar de quién es</button>`;
+      else {
+        const nRight = state.guesses.filter(x => x.submission_id === it.id && x.guess === it.player_id).length;
+        const awarded = (g.awarded || []).includes(it.id);
+        html += `<button class="green" data-act="award" data-sub="${it.id}" ${awarded || !nRight ? 'disabled' : ''}>${awarded ? '✅ Puntos dados' : `+1 a los que acertaron (${nRight})`}</button>`;
+      }
+    }
+    html += `<div class="navrow">
+      <button class="ghost" data-act="step" data-d="-1" ${step === 0 ? 'disabled' : ''}>← Anterior</button>
+      <button data-act="step" data-d="1" ${step >= items.length - 1 ? 'disabled' : ''}>Siguiente →</button></div>
+      <button class="ghost" data-act="backToWrite">✏️ Volver a escribir</button></div>`;
+  }
+  return html;
+}
+
+function scorePanel() {
+  const g = state.game;
+  const rp = roundPoints(g.round);
+  const tot = Object.fromEntries(totals().map(p => [p.id, p.total]));
+  return `<div class="card admin-box">
+    <h2>👑 Puntos de ${esc(ligaGame().name)}</h2>
+    ${state.players.map(p => `
+      <div class="score-row">
+        <span class="name">${esc(p.name)}</span>
+        <span class="tot">Σ ${tot[p.id] ?? 0}</span>
+        <button class="ghost" data-act="pts" data-d="-1" data-id="${p.id}">−</button>
+        <span class="rp">${rp[p.id] ?? 0}</span>
+        <button class="ghost" data-act="pts" data-d="1" data-id="${p.id}">+</button>
+      </div>`).join('')}
+    <button class="pink" data-act="endRound">⏹ Acabar ronda ${g.round}</button>
+  </div>`;
+}
+
+function adminLigaPanel() {
   const g = state.game;
   let body = '';
   if (g.phase === 'lobby' || g.phase === 'between') {
-    body = `
-      <input id="roundTitle" type="text" maxlength="60" placeholder="Nombre del juego de la ronda ${g.round + 1} (opcional)">
-      <button class="green" data-act="startRound">▶ Iniciar ronda ${g.round + 1} de ${LIGA_ROUNDS}</button>`;
-  } else if (g.phase === 'round') {
-    body = `<button class="pink" data-act="endRound">⏹ Acabar ronda ${g.round} y poner puntos</button>`;
-  } else if (g.phase === 'scoring') {
-    body = `<p class="muted">Puntos de la ronda ${g.round}:</p>
-      ${state.players.map(p => `
-        <div class="row" style="margin:8px 0">
-          <span class="name">${esc(p.name)}</span>
-          <div class="stepper" style="flex:0">
-            <button class="ghost" data-act="dec" data-id="${p.id}">−</button>
-            <input type="number" inputmode="numeric" data-score="${p.id}" value="${draft[p.id] ?? 0}">
-            <button class="ghost" data-act="inc" data-id="${p.id}">+</button>
-          </div>
-        </div>`).join('')}
-      <button class="green" data-act="saveScores">💾 Guardar puntos</button>
-      <button class="ghost" data-act="back" data-to="round">← Volver a la ronda</button>`;
+    const next = LIGA[g.round];
+    body = `<button class="green" data-act="startRound" data-n="${g.round + 1}">▶ Empezar ronda ${g.round + 1}: ${next.emoji} ${esc(next.name)}</button>`;
+    if (g.round > 0) body += `<button class="ghost" data-act="reopen">← Volver a la ronda ${g.round}</button>`;
   } else if (g.phase === 'liga_done') {
     body = `<p>Liguilla terminada. Los 2 primeros serán capitanes.</p>
       <button class="green" data-act="startDraft">🧢 Empezar elección de equipos</button>
-      <button class="ghost" data-act="reopenScoring">✏️ Corregir puntos de la ronda ${g.round}</button>`;
-  } else if (g.phase === 'draft') {
+      <button class="ghost" data-act="reopen">← Volver a la ronda ${g.round}</button>`;
+  }
+  return body ? `<div class="card admin-box"><h2>👑 Panel de Teo</h2>${body}</div>` : '';
+}
+
+function adminTeamPanel() {
+  const g = state.game;
+  let body = '';
+  if (g.phase === 'draft') {
     body = `<p class="muted">Los capitanes están eligiendo en sus móviles.</p>
       <button class="ghost" data-act="startDraft">↺ Repetir elección</button>`;
   } else if (g.phase === 'teams') {
@@ -394,51 +571,58 @@ function adminPanel() {
   } else if (g.phase === 'final') {
     body = `<button class="ghost" data-act="prevTeamGame">← Volver a ${TEAM_GAMES[TEAM_GAMES.length - 1].name}</button>`;
   }
-  return `<div class="card admin-box">
-    <h2>👑 Panel de Teo</h2>
-    ${body}
-    <details style="margin-top:14px">
-      <summary>Más opciones</summary>
+  return body ? `<div class="card admin-box"><h2>👑 Panel de Teo</h2>${body}</div>` : '';
+}
+
+function adminExtras() {
+  return `<div class="card admin-box"><details>
+      <summary>👑 Más opciones</summary>
       ${state.players.filter(p => p.id !== myId).map(p => `
         <div class="row" style="margin:6px 0"><span class="name">${esc(p.name)}</span>
         <button class="small danger" style="flex:0" data-act="remove" data-id="${p.id}">Echar</button></div>`).join('')}
       <button class="ghost" data-act="reset">↺ Reiniciar partida (mismos jugadores)</button>
       <button class="danger" data-act="resetAll">🗑 Borrar todo</button>
-    </details>
-  </div>`;
+    </details></div>`;
 }
 
 function mainView() {
   const g = state.game;
   let html = topbar();
+  const admin = isAdmin();
 
-  if (['lobby', 'round', 'scoring', 'between', 'liga_done'].includes(g.phase)) {
+  if (['lobby', 'round', 'between', 'liga_done'].includes(g.phase)) {
     html += `<h1>La Liguilla</h1>${roundDots()}`;
     if (g.phase === 'lobby') {
-      html += `<p class="center muted">Esperando a que Teo empiece la primera ronda…</p>`;
+      html += `<p class="center muted">Esperando a que Teo empiece la primera ronda…</p>
+        <div class="card"><h2>Rondas</h2><ol class="board">${LIGA.map((l, i) =>
+          `<li><span class="pos">${i + 1}</span><span class="name">${l.emoji} ${esc(l.name)}</span></li>`).join('')}</ol></div>`;
     } else if (g.phase === 'round') {
-      html += `<div class="hero" style="background:linear-gradient(160deg,#7a1fd1,#ff3d7f)">
+      const lg = ligaGame();
+      html += `<div class="hero" style="background:${lg.bg};padding:20px 16px">
         <div class="sub">RONDA ${g.round} DE ${LIGA_ROUNDS}</div>
-        <div class="title" style="font-size:34px">${esc(g.round_title || '¡A jugar!')}</div>
-        <div class="sub">Teo explica las reglas 🍺</div></div>`;
-    } else if (g.phase === 'scoring') {
-      html += `<p class="center">⏳ Teo está apuntando los puntos de la ronda ${g.round}…</p>`;
+        <div class="emoji" style="font-size:64px">${lg.emoji}</div>
+        <div class="title" style="font-size:32px">${esc(lg.name.toUpperCase())}</div>
+        ${lg.type === 'title' ? '<div class="sub">Teo explica las reglas 🍺</div>' : ''}
+      </div>`;
+      if (lg.type === 'likely') html += likelyView();
+      if (lg.type === 'write') html += g.stage === 'read' ? readView() : writeView();
+      if (admin) html += scorePanel();
     } else if (g.phase === 'between') {
-      html += `<p class="center">Ronda ${g.round} terminada. Siguiente ronda en breve.</p>`;
+      html += `<p class="center">Ronda ${g.round} terminada. Siguiente: ${LIGA[g.round].emoji} <b>${esc(LIGA[g.round].name)}</b></p>`;
     } else if (g.phase === 'liga_done') {
       html += `<p class="center">🏁 ¡Liguilla terminada! Los 2 primeros son capitanes.</p>`;
     }
-    if (isAdmin()) html += adminPanel();
+    if (admin) html += adminLigaPanel();
     html += `<div class="card"><h2>Clasificación</h2>${leaderboard(g.phase === 'liga_done' ? 2 : 0)}</div>`;
+    if (admin) html += adminExtras();
     return html;
   }
 
   if (g.phase === 'draft') {
     const turnCap = g.captains[g.pick_turn];
-    const myTurn = turnCap === myId;
     const free = state.players.filter(p => p.team == null);
     html += `<h1>Elección de equipos</h1>`;
-    if (myTurn) {
+    if (turnCap === myId) {
       html += `<div class="card" style="border:2px solid var(--accent)"><h2>🧢 ¡Te toca elegir!</h2>
         <div class="grid-pick active">${free.map(p => `<button data-act="pick" data-id="${p.id}">${esc(p.name)}</button>`).join('')}</div></div>`;
     } else {
@@ -446,18 +630,10 @@ function mainView() {
         <div class="card"><h2>Sin equipo</h2><div class="grid-pick">${free.map(p => `<button disabled>${esc(p.name)}</button>`).join('')}</div></div>`;
     }
     html += teamsView(false);
-    if (isAdmin()) html += adminPanel();
-    return html;
-  }
-
-  if (g.phase === 'teams') {
+  } else if (g.phase === 'teams') {
     html += `<h1>Equipos listos</h1><p class="center muted">Se viene: 🎯 Dardos · 🎳 Bolas · 🏀 Canasta</p>`;
     html += teamsView(false);
-    if (isAdmin()) html += adminPanel();
-    return html;
-  }
-
-  if (g.phase === 'tgame') {
+  } else if (g.phase === 'tgame') {
     const tg = TEAM_GAMES[g.team_game];
     const w = (g.team_results || {})[String(g.team_game)];
     const myTeam = me()?.team;
@@ -469,12 +645,8 @@ function mainView() {
       ${myTeam ? `<div class="pill" style="margin-top:14px;background:#0005">Juegas con ${esc(teamName(myTeam))}</div>` : ''}
       ${w ? `<div class="pill" style="margin-top:10px;background:#fff;color:#1b0b2b">🏆 Gana ${esc(teamName(w))}</div>` : ''}
     </div>`;
-    if (isAdmin()) html += adminPanel();
     html += teamsView(true);
-    return html;
-  }
-
-  if (g.phase === 'final') {
+  } else if (g.phase === 'final') {
     const sc = teamScores();
     const winner = sc[1] === sc[2] ? 0 : (sc[1] > sc[2] ? 1 : 2);
     html += `<div class="hero" style="background:linear-gradient(160deg,#ffcc00,#ff3d7f)">
@@ -484,11 +656,13 @@ function mainView() {
       <div class="sub" style="color:#1b0b2b">${winner ? 'Los perdedores beben 🍻' : 'Bebéis todos 🍻'}</div>
     </div>`;
     html += teamsView(true);
-    if (isAdmin()) html += adminPanel();
-    html += `<div class="card"><h2>Liguilla</h2>${leaderboard()}</div>`;
-    return html;
+  } else {
+    return html + '<p>Fase desconocida</p>';
   }
-  return html + '<p>Fase desconocida</p>';
+  if (admin) html += adminTeamPanel();
+  if (g.phase === 'final') html += `<div class="card"><h2>Liguilla</h2>${leaderboard()}</div>`;
+  if (admin) html += adminExtras();
+  return html;
 }
 
 function render() {
@@ -497,60 +671,50 @@ function render() {
       : '<p class="center" style="margin-top:40vh">Sin conexión. Reintentando…</p>';
     return;
   }
-  // keep typed text across re-renders
-  const focused = document.activeElement;
+  // keep typed text and focus across re-renders
   const keep = {};
-  ['nameInput', 'roundTitle'].forEach(id => { const el = document.getElementById(id); if (el) keep[id] = el.value; });
-  const focusId = focused?.id || (focused?.dataset?.score ? 'score:' + focused.dataset.score : null);
+  document.querySelectorAll('#app input[id], #app textarea[id]').forEach(el => keep[el.id] = el.value);
+  const focusId = document.activeElement?.id;
+  const scrollY = window.scrollY;
 
   $app.innerHTML = me() ? mainView() : joinView();
 
   Object.entries(keep).forEach(([id, v]) => { const el = document.getElementById(id); if (el) el.value = v; });
-  if (focusId) {
-    const el = focusId.startsWith('score:') ? document.querySelector(`[data-score="${focusId.slice(6)}"]`) : document.getElementById(focusId);
-    if (el) { el.focus(); try { const l = el.value.length; el.setSelectionRange?.(l, l); } catch {} }
-  }
+  if (focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
+  window.scrollTo(0, scrollY);
   document.getElementById('joinForm')?.addEventListener('submit', join);
 }
 
-// don't re-render while someone is typing (unless the phase changed)
-let pendingRender = false;
 document.addEventListener('focusout', () => setTimeout(() => {
   if (pendingRender && !typing()) { pendingRender = false; render(); }
 }, 50));
 
-document.addEventListener('input', e => {
-  const id = e.target.dataset?.score;
-  if (id) draft[id] = e.target.value;
-});
-
 document.addEventListener('click', async e => {
   const b = e.target.closest('[data-act]');
-  if (!b) return;
+  if (!b || b.disabled) return;
   const act = b.dataset.act, id = b.dataset.id;
-  if (b.tagName === 'BUTTON' && b.disabled) return;
-  const busy = !['inc', 'dec', 'leave'].includes(act);
+  const busy = !['pts', 'leave', 'edit'].includes(act);
   if (busy) b.disabled = true;
   try {
     switch (act) {
       case 'leave': leave(); break;
-      case 'startRound': await startRound(); break;
-      case 'endRound': await endRound(); break;
-      case 'inc': case 'dec': {
-        const v = (parseInt(draft[id], 10) || 0) + (act === 'inc' ? 1 : -1);
-        draft[id] = v;
-        const input = document.querySelector(`[data-score="${id}"]`);
-        if (input) input.value = v;
-        break;
-      }
-      case 'saveScores': await saveScores(); break;
-      case 'back': await goBack(b.dataset.to); break;
-      case 'reopenScoring': draft = { ...roundPoints(state.game.round) }; await setGame({ phase: 'scoring' }); break;
+      case 'startRound': await startRound(parseInt(b.dataset.n, 10)); break;
+      case 'endRound': await setGame({ phase: state.game.round >= LIGA_ROUNDS ? 'liga_done' : 'between' }); break;
+      case 'reopen': await setGame({ phase: 'round' }); break;
+      case 'pts': await addPoints(id, parseInt(b.dataset.d, 10)); break;
+      case 'step': await setStep(state.game.step + parseInt(b.dataset.d, 10)); break;
+      case 'submitWriting': await submitWriting(); break;
+      case 'edit': editing = true; render(); break;
+      case 'startReading': await setGame({ stage: 'read', step: 0, reveal: false }); break;
+      case 'backToWrite': await setGame({ stage: 'write', reveal: false }); break;
+      case 'guess': await guess(b.dataset.sub, id); break;
+      case 'reveal': await setGame({ reveal: true }); break;
+      case 'award': await awardCorrect(b.dataset.sub); break;
       case 'startDraft':
         if (state.game.phase !== 'liga_done' && !confirm('¿Repetir la elección desde cero?')) break;
         await startDraft(); break;
       case 'pick': await pick(id); break;
-      case 'startTeamGames': await startTeamGames(); break;
+      case 'startTeamGames': await setGame({ phase: 'tgame', team_game: 0 }); break;
       case 'win': await setWinner(parseInt(b.dataset.team, 10)); break;
       case 'nextTeamGame': await nextTeamGame(); break;
       case 'prevTeamGame': await prevTeamGame(); break;
@@ -559,7 +723,7 @@ document.addEventListener('click', async e => {
       case 'resetAll': await resetGame(false); break;
     }
   } catch (err) { console.error(err); }
-  finally { if (busy && b.isConnected) b.disabled = false; load(); }
+  finally { if (busy && b.isConnected) b.disabled = false; if (act !== 'edit' && act !== 'leave') scheduleLoad(); }
 });
 
 load();

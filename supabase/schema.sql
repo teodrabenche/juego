@@ -9,7 +9,7 @@ create unique index players_name_key on public.players (lower(name));
 
 create table public.scores (
   player_id uuid not null references public.players(id) on delete cascade,
-  round int not null check (round between 1 and 5),
+  round int not null check (round between 1 and 6),
   points int not null default 0,
   primary key (player_id, round)
 );
@@ -54,3 +54,41 @@ end $$;
 grant execute on function public.pick_player(uuid, uuid) to anon, authenticated;
 
 alter publication supabase_realtime add table public.players, public.scores, public.game;
+
+-- v2: 6 rondas con juegos fijos, textos (Exposed / Confesión) y votos
+alter table public.game add column if not exists stage text not null default 'play';
+alter table public.game add column if not exists step int not null default 0;
+alter table public.game add column if not exists reveal boolean not null default false;
+alter table public.game add column if not exists awarded text[] not null default '{}';
+
+create table public.submissions (
+  id uuid primary key default gen_random_uuid(),
+  round int not null,
+  player_id uuid not null references public.players(id) on delete cascade,
+  slot int not null default 0,
+  text text not null check (char_length(text) between 1 and 300),
+  sort_key double precision not null default random(),
+  created_at timestamptz not null default now(),
+  unique (round, player_id, slot)
+);
+
+create table public.guesses (
+  submission_id uuid not null references public.submissions(id) on delete cascade,
+  player_id uuid not null references public.players(id) on delete cascade,
+  guess uuid not null references public.players(id) on delete cascade,
+  primary key (submission_id, player_id)
+);
+
+alter table public.submissions enable row level security;
+alter table public.guesses enable row level security;
+create policy "submissions all" on public.submissions for all to anon, authenticated using (true) with check (true);
+create policy "guesses all" on public.guesses for all to anon, authenticated using (true) with check (true);
+
+create or replace function public.add_points(p_player uuid, p_round int, p_delta int)
+returns void language sql security definer set search_path = public as $$
+  insert into public.scores (player_id, round, points) values (p_player, p_round, p_delta)
+  on conflict (player_id, round) do update set points = public.scores.points + excluded.points;
+$$;
+grant execute on function public.add_points(uuid, int, int) to anon, authenticated;
+
+alter publication supabase_realtime add table public.submissions, public.guesses;
